@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import * as api from "./api.js";
 
 const HOLIDAYS = {
@@ -19,21 +19,19 @@ const HOLIDAYS = {
   "2026-11-03":"文化の日","2026-11-23":"勤労感謝の日",
 };
 
-function isHoliday(d) { return !!HOLIDAYS[d]; }
-function getHolidayName(d) { return HOLIDAYS[d] || ""; }
-function formatDate(iso) { return new Date(iso).toLocaleDateString("ja-JP",{year:"numeric",month:"long",day:"numeric",weekday:"short"}); }
-function formatTime(iso) { return new Date(iso).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"}); }
-function formatDateTime(iso) { return `${formatDate(iso)} ${formatTime(iso)}`; }
-function groupByDate(slots) {
-  const map={};slots.forEach(s=>{const day=s.start.slice(0,10);if(!map[day])map[day]=[];map[day].push(s);});return map;
-}
-function calcEndTime(dateStr,startTime,duration) {
+function isHoliday(d){return!!HOLIDAYS[d];}
+function getHolidayName(d){return HOLIDAYS[d]||"";}
+function formatDate(iso){return new Date(iso).toLocaleDateString("ja-JP",{year:"numeric",month:"long",day:"numeric",weekday:"short"});}
+function formatTime(iso){return new Date(iso).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"});}
+function formatDateTime(iso){return`${formatDate(iso)} ${formatTime(iso)}`;}
+function groupByDate(slots){const map={};slots.forEach(s=>{const day=s.start.slice(0,10);if(!map[day])map[day]=[];map[day].push(s);});return map;}
+function calcEndTime(dateStr,startTime,duration){
   if(!dateStr||!startTime||!duration)return"";
   const[h,m]=startTime.split(":").map(Number);const total=h*60+m+parseInt(duration);
   return`${String(Math.floor(total/60)).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`;
 }
 
-function MiniCalendar({value,onChange}) {
+function MiniCalendar({value,onChange}){
   const today=new Date();
   const[viewYear,setViewYear]=useState(value?parseInt(value.slice(0,4)):today.getFullYear());
   const[viewMonth,setViewMonth]=useState(value?parseInt(value.slice(5,7))-1:today.getMonth());
@@ -46,9 +44,9 @@ function MiniCalendar({value,onChange}) {
   return(
     <div style={{border:"1px solid #ddd",borderRadius:10,overflow:"hidden",userSelect:"none",background:"#fff",width:280}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#667eea",color:"#fff",padding:"10px 14px"}}>
-        <button onClick={prevMonth} style={{background:"none",border:"none",color:"#fff",fontSize:18,cursor:"pointer"}}>‹</button>
+        <button onClick={prevMonth} style={{background:"none",border:"none",color:"#fff",fontSize:18,cursor:"pointer"}}>&#8249;</button>
         <span style={{fontWeight:700,fontSize:15}}>{viewYear}年{viewMonth+1}月</span>
-        <button onClick={nextMonth} style={{background:"none",border:"none",color:"#fff",fontSize:18,cursor:"pointer"}}>›</button>
+        <button onClick={nextMonth} style={{background:"none",border:"none",color:"#fff",fontSize:18,cursor:"pointer"}}>&#8250;</button>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",textAlign:"center"}}>
         {weekdays.map((w,i)=><div key={w} style={{padding:"6px 0",fontSize:12,fontWeight:700,color:i===0?"#e74c3c":i===6?"#3498db":"#555",background:"#f8f8f8"}}>{w}</div>)}
@@ -62,7 +60,7 @@ function MiniCalendar({value,onChange}) {
           return(
             <div key={dateStr} title={holName||undefined} onClick={()=>!isPast&&onChange(dateStr)}
               style={{padding:"6px 2px",fontSize:12,cursor:isPast?"default":"pointer",color,fontWeight:isSelected?"700":"400",
-                background:isSelected?"#667eea":isHol?"#fff5f5":"transparent",borderRadius:isSelected?6:0,position:"relative"}}>
+                background:isSelected?"#667eea":isHol?"#fff5f5":"transparent",borderRadius:isSelected?6:0}}>
               {isSelected?<span style={{color:"#fff"}}>{d}</span>:d}
               {isHol&&<div style={{fontSize:8,color:"#e74c3c",lineHeight:1,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:38}}>{holName}</div>}
             </div>
@@ -73,7 +71,7 @@ function MiniCalendar({value,onChange}) {
   );
 }
 
-export default function App() {
+export default function App(){
   const[mode,setMode]=useState("home");
   const[slots,setSlots]=useState([]);
   const[bookings,setBookings]=useState([]);
@@ -82,25 +80,50 @@ export default function App() {
   const[adminPass,setAdminPass]=useState("");
   const[adminError,setAdminError]=useState("");
   const[isAdminLoggedIn,setIsAdminLoggedIn]=useState(false);
+  const[hostEmails,setHostEmails]=useState("");
+  const[hostEmailsSaved,setHostEmailsSaved]=useState(false);
   const[newSlotDate,setNewSlotDate]=useState("");
   const[newSlotStart,setNewSlotStart]=useState("");
   const[newSlotDuration,setNewSlotDuration]=useState("60");
   const newSlotEnd=calcEndTime(newSlotDate,newSlotStart,newSlotDuration);
   const[empName,setEmpName]=useState("");
   const[empEmail,setEmpEmail]=useState("");
-  const[hostEmail,setHostEmail]=useState("host@company.com");
   const[selected,setSelected]=useState([]);
   const[empStep,setEmpStep]=useState("form");
   const[myBooking,setMyBooking]=useState(null);
   const[changeSelected,setChangeSelected]=useState([]);
   const[notification,setNotification]=useState("");
+  const lastModifiedRef=useRef('0');
 
   const loadSlots=useCallback(async()=>{try{setSlots(await api.fetchSlots());}catch(e){console.error(e);}}, []);
-  const loadBookings=useCallback(async()=>{try{setBookings(await api.fetchBookings());}catch(e){console.error(e);}}, []);
-  const loadAll=useCallback(async()=>{await Promise.all([loadSlots(),loadBookings()]);},[loadSlots,loadBookings]);
+
+  const loadAll=useCallback(async()=>{
+    try{
+      const data=await api.pollAdminData(lastModifiedRef.current);
+      lastModifiedRef.current=data.lastModified;
+      setBookings(data.bookings);
+      setSlots(data.slots);
+    }catch(e){console.error(e);}
+  },[]);
 
   useEffect(()=>{loadSlots();},[loadSlots]);
-  useEffect(()=>{if(isAdminLoggedIn)loadAll();},[isAdminLoggedIn,loadAll]);
+
+  useEffect(()=>{
+    if(!isAdminLoggedIn)return;
+    (async()=>{
+      try{
+        const[settings]=await Promise.all([api.fetchSettings(),loadAll()]);
+        setHostEmails(settings.hostEmails||'');
+      }catch(e){console.error(e);}
+    })();
+  },[isAdminLoggedIn,loadAll]);
+
+  useEffect(()=>{
+    if(!isAdminLoggedIn)return;
+    const iv=setInterval(loadAll,10000);
+    return()=>clearInterval(iv);
+  },[isAdminLoggedIn,loadAll]);
+
   useEffect(()=>{
     if(empStep!=="myStatus")return;
     const iv=setInterval(async()=>{
@@ -117,39 +140,77 @@ export default function App() {
     catch(e){setAdminError(e.message||"パスワードが違います");}
     finally{setIsLoading(false);}
   }
+
+  async function saveHostEmails(){
+    setIsLoading(true);
+    try{
+      await api.updateSettings({hostEmails});
+      setHostEmailsSaved(true);
+      setTimeout(()=>setHostEmailsSaved(false),3000);
+      showNotification("ホストのメールアドレスを保存しました");
+    }catch(e){setError(e.message);}
+    finally{setIsLoading(false);}
+  }
+
   async function addSlot(){
     if(!newSlotDate||!newSlotStart||!newSlotEnd)return;
     setIsLoading(true);setError("");
-    try{await api.createSlot(`${newSlotDate}T${newSlotStart}:00`,`${newSlotDate}T${newSlotEnd}:00`);await loadSlots();showNotification("面談枠を追加しました");setNewSlotStart("");}
-    catch(e){setError(e.message);}finally{setIsLoading(false);}
+    try{
+      await api.createSlot(`${newSlotDate}T${newSlotStart}:00`,`${newSlotDate}T${newSlotEnd}:00`);
+      await loadAll();showNotification("面談枠を追加しました");setNewSlotStart("");
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
+
   async function deleteSlot(id){
-    setIsLoading(true);try{await api.deleteSlot(id);await loadSlots();showNotification("面談枠を削除しました");}
+    setIsLoading(true);
+    try{await api.deleteSlot(id);await loadAll();showNotification("面談枠を削除しました");}
     catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
+
   async function confirmBooking(bookingId,slotId){
     setIsLoading(true);setError("");
-    try{await api.confirmBookingSlot(bookingId,slotId);await loadAll();showNotification("面談日時を確定しました。メールを送信しました。");}
-    catch(e){setError(e.message);}finally{setIsLoading(false);}
+    try{
+      const result=await api.confirmBookingSlot(bookingId,slotId);
+      await loadAll();
+      if(result._emailWarnings&&result._emailWarnings.length>0){
+        showNotification("面談日時を確定しました。※メール送信に問題があります（Vercelログを確認）");
+      }else{
+        showNotification("面談日時を確定しました。メールを送信しました。");
+      }
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
+
   async function submitEmpForm(){
     if(!empName||!empEmail)return;setIsLoading(true);setError("");
-    try{const existing=await api.fetchBookingByEmail(empEmail);setMyBooking(existing);await loadSlots();setEmpStep("myStatus");}
-    catch(e){if(e.status===404)setEmpStep("pick");else setError(e.message);}
-    finally{setIsLoading(false);}
+    try{
+      const existing=await api.fetchBookingByEmail(empEmail);
+      setMyBooking(existing);await loadSlots();setEmpStep("myStatus");
+    }catch(e){
+      if(e.status===404)setEmpStep("pick");else setError(e.message);
+    }finally{setIsLoading(false);}
   }
+
   function toggleSelect(id){if(selected.includes(id))setSelected(selected.filter(s=>s!==id));else if(selected.length<3)setSelected([...selected,id]);}
   function toggleChangeSelect(id){if(changeSelected.includes(id))setChangeSelected(changeSelected.filter(s=>s!==id));else if(changeSelected.length<3)setChangeSelected([...changeSelected,id]);}
+
   async function submitPreferences(){
     if(selected.length===0)return;setIsLoading(true);setError("");
-    try{const b=await api.createBooking({name:empName,email:empEmail,hostEmail,preferences:selected});setMyBooking(b);setEmpStep("done");showNotification(`${empName}さんの希望を受け付けました。`);}
-    catch(e){setError(e.message);}finally{setIsLoading(false);}
+    try{
+      const b=await api.createBooking({name:empName,email:empEmail,preferences:selected});
+      setMyBooking(b);setEmpStep("done");
+      showNotification(`${empName}さんの希望を受け付けました。`);
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
+
   async function submitChange(){
     if(changeSelected.length===0||!myBooking)return;setIsLoading(true);setError("");
-    try{const updated=await api.changeBookingPreferences(myBooking.id,changeSelected,empEmail);setMyBooking(updated);await loadSlots();setEmpStep("done");showNotification("変更を受け付けました。メールを送信しました。");}
-    catch(e){setError(e.message);}finally{setIsLoading(false);}
+    try{
+      const updated=await api.changeBookingPreferences(myBooking.id,changeSelected,empEmail);
+      setMyBooking(updated);await loadSlots();setEmpStep("done");
+      showNotification("変更を受け付けました。メールを送信しました。");
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
+
   async function refreshMyStatus(){
     setIsLoading(true);
     try{setMyBooking(await api.fetchBookingByEmail(empEmail));await loadSlots();showNotification("最新の状態に更新しました");}
@@ -159,6 +220,7 @@ export default function App() {
   const availableSlots=slots.filter(s=>!s.booked);
   const grouped=groupByDate(availableSlots);
 
+  // ── ホーム ──
   if(mode==="home")return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#667eea,#764ba2)",display:"flex",alignItems:"center",justifyContent:"center"}}>
       {notification&&<Toast msg={notification}/>}
@@ -172,13 +234,14 @@ export default function App() {
     </div>
   );
 
+  // ── 管理者ページ ──
   if(mode==="admin")return(
     <div style={{minHeight:"100vh",background:"#f5f6fa",padding:24}}>
       {notification&&<Toast msg={notification}/>}
       <div style={{maxWidth:860,margin:"0 auto"}}>
         <button onClick={()=>{setMode("home");setIsAdminLoggedIn(false);setAdminPass("");api.clearAdminToken();}} style={backBtn()}>← ホームへ</button>
         <h2 style={{color:"#333"}}>管理者ページ</h2>
-        {error&&<div style={{background:"#ffeaea",border:"1px solid #f5c6cb",color:"#721c24",padding:"10px 16px",borderRadius:8,marginBottom:16,fontSize:14}}>{error}</div>}
+        {error&&<ErrBox msg={error} onClose={()=>setError("")}/>}
         {!isAdminLoggedIn?(
           <div style={cardStyle()}>
             <h3>管理者ログイン</h3>
@@ -187,6 +250,25 @@ export default function App() {
             <button onClick={adminLogin} disabled={isLoading} style={btnStyle(isLoading?"#aaa":"#667eea")}>{isLoading?"ログイン中...":"ログイン"}</button>
           </div>
         ):(<>
+          {/* ホスト設定 */}
+          <div style={cardStyle()}>
+            <h3>✉️ ホストのメールアドレス設定</h3>
+            <p style={{fontSize:13,color:"#666",marginBottom:8}}>
+              通知メールの送信先です。複数ある場合はカンマ（,）で区切ってください。<br/>
+              <span style={{color:"#888"}}>例: host1@company.com, host2@company.com</span>
+            </p>
+            <textarea value={hostEmails} onChange={e=>setHostEmails(e.target.value)}
+              placeholder="host@company.com, manager@company.com" rows={3}
+              style={{display:"block",width:"100%",padding:"10px 12px",border:"1px solid #ddd",borderRadius:6,fontSize:14,marginBottom:12,boxSizing:"border-box",resize:"vertical"}}/>
+            <button onClick={saveHostEmails} disabled={isLoading} style={btnStyle(isLoading?"#aaa":"#667eea")}>
+              {hostEmailsSaved?"✅ 保存しました":isLoading?"保存中...":"メールアドレスを保存する"}
+            </button>
+            <p style={{fontSize:12,color:"#e67e22",marginTop:10}}>
+              ⚠️ Resendのテストモード（onboarding@resend.dev）では、Resendアカウントに登録したメールアドレス宛にしか送信できません。社内全員へ届けるにはResendでドメイン認証が必要です。
+            </p>
+          </div>
+
+          {/* スロット追加 */}
           <div style={cardStyle()}>
             <h3>📌 面談枠を追加</h3>
             <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start"}}>
@@ -218,6 +300,8 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* 登録済みスロット */}
           <div style={cardStyle()}>
             <h3>📋 登録済み面談枠</h3>
             {slots.length===0?<p style={{color:"#999"}}>まだ枠が登録されていません</p>:(
@@ -240,35 +324,59 @@ export default function App() {
               </table>
             )}
           </div>
+
+          {/* 社員の希望一覧 */}
           <div style={cardStyle()}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
               <h3 style={{margin:0}}>👥 社員の希望一覧</h3>
-              <button onClick={loadAll} style={{background:"#667eea",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:13}}>🔄 更新</button>
+              <span style={{fontSize:12,color:"#aaa"}}>10秒ごとに自動更新</span>
             </div>
+            <p style={{fontSize:12,color:"#999",marginBottom:16}}>社員が希望を提出・変更すると自動的に反映されます</p>
             {bookings.filter(b=>!b.cancelled).length===0?<p style={{color:"#999"}}>まだ希望がありません</p>:
               bookings.filter(b=>!b.cancelled).map(b=>{
-                const confirmedSlot=slots.find(s=>s.id===b.confirmedSlotId);
                 return(
-                  <div key={b.id} style={{border:"1px solid #ddd",borderRadius:8,padding:16,marginBottom:12}}>
-                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-                      <div><strong>{b.name}</strong> <span style={{color:"#666",fontSize:13}}>{b.email}</span>{b.changedAt&&<span style={{marginLeft:8,background:"#fff3cd",color:"#856404",fontSize:11,padding:"2px 6px",borderRadius:4}}>変更あり</span>}</div>
-                      <span style={{color:b.confirmed?"#27ae60":"#e67e22",fontWeight:600,fontSize:13}}>{b.confirmed?"✅ 確定済":"⏳ 未確定"}</span>
-                    </div>
-                    {b.confirmed&&confirmedSlot&&<p style={{marginTop:8,color:"#27ae60",fontSize:13}}>確定日時: {formatDateTime(confirmedSlot.start)} 〜 {formatTime(confirmedSlot.end)}</p>}
-                    {!b.confirmed&&(
-                      <div style={{marginTop:8}}>
-                        {b.preferences.map((pid,i)=>{
-                          const sl=slots.find(s=>s.id===pid);
-                          return sl?(
-                            <div key={pid} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-                              <span style={{background:["#e74c3c","#e67e22","#3498db"][i],color:"#fff",borderRadius:4,padding:"2px 8px",fontSize:12}}>第{i+1}希望</span>
-                              <span style={{fontSize:13}}>{formatDateTime(sl.start)} 〜 {formatTime(sl.end)}</span>
-                              <button onClick={()=>confirmBooking(b.id,pid)} disabled={isLoading||sl.booked} style={{background:sl.booked?"#aaa":"#27ae60",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:sl.booked?"not-allowed":"pointer",fontSize:12}}>{sl.booked?"予約済":"この日時で確定"}</button>
-                            </div>
-                          ):null;
-                        })}
+                  <div key={b.id} style={{border:`2px solid ${b.confirmed?"#27ae60":"#ddd"}`,borderRadius:8,padding:16,marginBottom:12,background:b.confirmed?"#f9fff9":"#fff"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:10}}>
+                      <div>
+                        <strong style={{fontSize:15}}>{b.name}</strong>
+                        <span style={{color:"#666",fontSize:13,marginLeft:8}}>{b.email}</span>
+                        {b.changedAt&&<span style={{marginLeft:8,background:"#fff3cd",color:"#856404",fontSize:11,padding:"2px 6px",borderRadius:4}}>変更あり</span>}
                       </div>
-                    )}
+                      <span style={{color:b.confirmed?"#27ae60":"#e67e22",fontWeight:700,fontSize:13}}>{b.confirmed?"✅ 確定済":"⏳ 未確定"}</span>
+                    </div>
+                    {/* 確定日時を強調表示 */}
+                    {b.confirmed&&(()=>{
+                      const cs=slots.find(s=>s.id===b.confirmedSlotId);
+                      return cs?(
+                        <div style={{background:"#e8f8ee",border:"2px solid #27ae60",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
+                          <span style={{fontSize:12,color:"#27ae60",fontWeight:700}}>🗓 確定日時</span>
+                          <p style={{margin:"4px 0 0",fontSize:15,fontWeight:700,color:"#1a7a3e"}}>{formatDateTime(cs.start)} 〜 {formatTime(cs.end)}</p>
+                        </div>
+                      ):null;
+                    })()}
+                    {/* 全希望を常に表示（確定後は薄く表示） */}
+                    <div>
+                      {b.preferences.map((pid,i)=>{
+                        const sl=slots.find(s=>s.id===pid);
+                        if(!sl)return null;
+                        const isConfirmed=b.confirmedSlotId===pid;
+                        const colors=["#e74c3c","#e67e22","#3498db"];
+                        return(
+                          <div key={pid} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap",opacity:b.confirmed&&!isConfirmed?0.45:1}}>
+                            <span style={{background:isConfirmed?"#27ae60":colors[i],color:"#fff",borderRadius:4,padding:"2px 8px",fontSize:12,whiteSpace:"nowrap"}}>
+                              第{i+1}希望{isConfirmed?" ✅":""}
+                            </span>
+                            <span style={{fontSize:13,color:b.confirmed&&!isConfirmed?"#aaa":"#333"}}>{formatDateTime(sl.start)} 〜 {formatTime(sl.end)}</span>
+                            {!b.confirmed&&(
+                              <button onClick={()=>confirmBooking(b.id,pid)} disabled={isLoading||sl.booked}
+                                style={{background:sl.booked?"#bbb":"#27ae60",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:sl.booked?"not-allowed":"pointer",fontSize:12}}>
+                                {sl.booked?"予約済":"この日時で確定"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })
@@ -279,13 +387,14 @@ export default function App() {
     </div>
   );
 
+  // ── 社員ページ ──
   if(mode==="employee")return(
     <div style={{minHeight:"100vh",background:"#f5f6fa",padding:24}}>
       {notification&&<Toast msg={notification}/>}
       <div style={{maxWidth:600,margin:"0 auto"}}>
         <button onClick={()=>{setMode("home");setEmpStep("form");setSelected([]);setEmpName("");setEmpEmail("");setMyBooking(null);setError("");}} style={backBtn()}>← ホームへ</button>
         <h2 style={{color:"#333"}}>面談希望日時の入力</h2>
-        {error&&<div style={{background:"#ffeaea",border:"1px solid #f5c6cb",color:"#721c24",padding:"10px 16px",borderRadius:8,marginBottom:16,fontSize:14}}>{error}<button onClick={()=>setError("")} style={{float:"right",background:"none",border:"none",cursor:"pointer",color:"#721c24"}}>✕</button></div>}
+        {error&&<ErrBox msg={error} onClose={()=>setError("")}/>}
 
         {empStep==="form"&&(
           <div style={cardStyle()}>
@@ -294,8 +403,6 @@ export default function App() {
             <input value={empName} onChange={e=>setEmpName(e.target.value)} placeholder="山田 太郎" style={inputStyle()}/>
             <label style={labelStyle()}>メールアドレス</label>
             <input value={empEmail} onChange={e=>setEmpEmail(e.target.value)} placeholder="taro@company.com" style={inputStyle()} type="email"/>
-            <label style={labelStyle()}>ホストのメールアドレス</label>
-            <input value={hostEmail} onChange={e=>setHostEmail(e.target.value)} style={inputStyle()} type="email"/>
             <button onClick={submitEmpForm} disabled={!empName||!empEmail||isLoading} style={btnStyle(!empName||!empEmail||isLoading?"#aaa":"#667eea")}>{isLoading?"確認中...":"次へ"}</button>
           </div>
         )}
@@ -329,7 +436,14 @@ export default function App() {
         {(empStep==="pick"||empStep==="change")&&(
           <div style={cardStyle()}>
             <h3>{empStep==="change"?"新しい希望日時を選択してください":"希望日時を選択してください"}（最大3つ）</h3>
-            <p style={{fontSize:13,color:"#666",marginBottom:16}}>クリックした順に第1・第2・第3希望となります</p>
+            <p style={{fontSize:13,color:"#666",marginBottom:12}}>クリックした順に第1・第2・第3希望となります</p>
+            {/* ボタンを上部に配置 */}
+            <div style={{marginBottom:16}}>
+              {empStep==="pick"
+                ?<button onClick={submitPreferences} disabled={selected.length===0||isLoading} style={btnStyle(selected.length===0||isLoading?"#aaa":"#667eea")}>{isLoading?"送信中...":"希望を提出する"} ({selected.length}/3)</button>
+                :<button onClick={submitChange} disabled={changeSelected.length===0||isLoading} style={btnStyle(changeSelected.length===0||isLoading?"#aaa":"#e67e22")}>{isLoading?"送信中...":"変更を提出する"} ({changeSelected.length}/3)</button>
+              }
+            </div>
             {availableSlots.length===0?<p style={{color:"#999"}}>現在選択できる枠がありません。管理者にお問い合わせください。</p>:
               Object.entries(grouped).sort().map(([day,daySlots])=>(
                 <div key={day} style={{marginBottom:16}}>
@@ -338,7 +452,9 @@ export default function App() {
                     const sel=empStep==="pick"?selected:changeSelected,toggle=empStep==="pick"?toggleSelect:toggleChangeSelect;
                     const idx=sel.indexOf(s.id),isSelected=idx!==-1;
                     return(
-                      <div key={s.id} onClick={()=>toggle(s.id)} style={{border:`2px solid ${isSelected?["#e74c3c","#e67e22","#3498db"][idx]:"#ddd"}`,borderRadius:8,padding:"12px 16px",marginBottom:8,cursor:"pointer",background:isSelected?["#ffeaea","#fff3e0","#e8f4ff"][idx]:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"all 0.2s"}}>
+                      <div key={s.id} onClick={()=>toggle(s.id)}
+                        style={{border:`2px solid ${isSelected?["#e74c3c","#e67e22","#3498db"][idx]:"#ddd"}`,borderRadius:8,padding:"12px 16px",marginBottom:8,cursor:"pointer",
+                          background:isSelected?["#ffeaea","#fff3e0","#e8f4ff"][idx]:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"all 0.2s"}}>
                         <span style={{fontSize:14}}>{formatTime(s.start)} 〜 {formatTime(s.end)}</span>
                         {isSelected&&<span style={{background:["#e74c3c","#e67e22","#3498db"][idx],color:"#fff",borderRadius:4,padding:"2px 8px",fontSize:12}}>第{idx+1}希望</span>}
                       </div>
@@ -346,10 +462,6 @@ export default function App() {
                   })}
                 </div>
               ))
-            }
-            {empStep==="pick"
-              ?<button onClick={submitPreferences} disabled={selected.length===0||isLoading} style={btnStyle(selected.length===0||isLoading?"#aaa":"#667eea")}>{isLoading?"送信中...":"希望を提出する"} ({selected.length}/3)</button>
-              :<button onClick={submitChange} disabled={changeSelected.length===0||isLoading} style={btnStyle(changeSelected.length===0||isLoading?"#aaa":"#e67e22")}>{isLoading?"送信中...":"変更を提出する"} ({changeSelected.length}/3)</button>
             }
           </div>
         )}
@@ -360,7 +472,11 @@ export default function App() {
               <div style={{fontSize:48}}>🎉</div>
               <h3 style={{color:"#27ae60"}}>提出完了！</h3>
               <p style={{color:"#666"}}>希望日時を受け付けました。<br/>面談日時が確定しましたら、メールでお知らせします。</p>
-              <button onClick={async()=>{setIsLoading(true);try{setMyBooking(await api.fetchBookingByEmail(empEmail));await loadSlots();setEmpStep("myStatus");}catch(e){setError(e.message);}finally{setIsLoading(false);}}} style={btnStyle("#667eea")}>状況を確認する</button>
+              <button onClick={async()=>{
+                setIsLoading(true);
+                try{setMyBooking(await api.fetchBookingByEmail(empEmail));await loadSlots();setEmpStep("myStatus");}
+                catch(e){setError(e.message);}finally{setIsLoading(false);}
+              }} style={btnStyle("#667eea")}>状況を確認する</button>
             </div>
           </div>
         )}
@@ -370,6 +486,7 @@ export default function App() {
 }
 
 function Toast({msg}){return<div style={{position:"fixed",top:20,right:20,background:"#27ae60",color:"#fff",padding:"12px 20px",borderRadius:8,zIndex:9999,maxWidth:320,fontSize:14,boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>{msg}</div>;}
+function ErrBox({msg,onClose}){return<div style={{background:"#ffeaea",border:"1px solid #f5c6cb",color:"#721c24",padding:"10px 16px",borderRadius:8,marginBottom:16,fontSize:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>{msg}</span><button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#721c24",fontSize:16}}>✕</button></div>;}
 function btnStyle(color){return{background:color,color:"#fff",border:"none",borderRadius:8,padding:"12px 24px",cursor:"pointer",fontSize:15,fontWeight:600,width:"100%",display:"block"};}
 function backBtn(){return{background:"none",border:"none",color:"#667eea",cursor:"pointer",fontSize:14,padding:"0 0 16px 0",fontWeight:600};}
 function cardStyle(){return{background:"#fff",borderRadius:12,padding:24,marginBottom:20,boxShadow:"0 2px 12px rgba(0,0,0,0.08)"};}
