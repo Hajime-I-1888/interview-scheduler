@@ -68,3 +68,17 @@ export async function changeBookingPreferences(bookingId, preferences, email) {
     body: JSON.stringify({ action: 'change', preferences, email }),
   });
 }
+
+export async function deleteBooking(bookingId) {
+  return apiFetch(`/api/bookings/${bookingId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ action: 'delete' }),
+  });
+}
+
+export async function restoreBooking(bookingId) {
+  return apiFetch(`/api/bookings/${bookingId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ action: 'restore' }),
+  });
+}

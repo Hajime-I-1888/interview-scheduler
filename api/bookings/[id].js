@@ -5,14 +5,14 @@ const { sendBookingConfirmedEmail, sendBookingChangedEmail } = require('../_lib/
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'PUT,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 module.exports = async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'PUT') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'PUT' && req.method !== 'DELETE') return res.status(405).json({ error: 'Method not allowed' });
 
   const { id } = req.query;
   const { action, slotId, preferences, email } = req.body || {};
@@ -107,6 +107,50 @@ module.exports = async function handler(req, res) {
     } finally {
       await redis.del(lockKey);
     }
+  }
+
+  // ─── 予約削除（管理者・ソフトデリート） ────────────────
+  if (action === 'delete' || req.method === 'DELETE') {
+    if (!requireAdmin(req, res)) return;
+    const [slots, bookings] = await Promise.all([getSlots(), getBookings()]);
+    const booking = bookings.find(b => b.id === id);
+    if (!booking) return res.status(404).json({ error: '予約が見つかりません' });
+
+    // 確定済みのスロットを解放
+    let updatedSlots = slots;
+    if (booking.confirmedSlotId) {
+      updatedSlots = slots.map(s =>
+        s.id === booking.confirmedSlotId ? { ...s, booked: false } : s
+      );
+    }
+
+    const updatedBooking = { ...booking, cancelled: true, cancelledAt: new Date().toISOString() };
+    const updatedBookings = bookings.map(b => b.id === id ? updatedBooking : b);
+    await Promise.all([setSlots(updatedSlots), setBookings(updatedBookings)]);
+    await touchLastModified();
+    return res.status(200).json({ success: true });
+  }
+
+  // ─── 予約復元（管理者） ─────────────────────────────
+  if (action === 'restore') {
+    if (!requireAdmin(req, res)) return;
+    const [slots, bookings] = await Promise.all([getSlots(), getBookings()]);
+    const booking = bookings.find(b => b.id === id);
+    if (!booking) return res.status(404).json({ error: '予約が見つかりません' });
+
+    // 確定スロットがあれば再度 booked に戻す
+    let updatedSlots = slots;
+    if (booking.confirmedSlotId) {
+      updatedSlots = slots.map(s =>
+        s.id === booking.confirmedSlotId ? { ...s, booked: true } : s
+      );
+    }
+
+    const updatedBooking = { ...booking, cancelled: false, cancelledAt: null };
+    const updatedBookings = bookings.map(b => b.id === id ? updatedBooking : b);
+    await Promise.all([setSlots(updatedSlots), setBookings(updatedBookings)]);
+    await touchLastModified();
+    return res.status(200).json({ success: true });
   }
 
   return res.status(400).json({ error: '無効な action です' });

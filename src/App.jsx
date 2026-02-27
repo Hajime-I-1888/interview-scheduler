@@ -93,6 +93,8 @@ export default function App(){
   const[myBooking,setMyBooking]=useState(null);
   const[changeSelected,setChangeSelected]=useState([]);
   const[notification,setNotification]=useState("");
+  const[undoTarget,setUndoTarget]=useState(null); // {id, name} 削除取り消し用
+  const undoTimerRef=useRef(null);
   const lastModifiedRef=useRef('0');
 
   const loadSlots=useCallback(async()=>{try{setSlots(await api.fetchSlots());}catch(e){console.error(e);}}, []);
@@ -211,6 +213,30 @@ export default function App(){
     }catch(e){setError(e.message);}finally{setIsLoading(false);}
   }
 
+  async function deleteBooking(bookingId, bookingName){
+    setIsLoading(true);
+    try{
+      await api.deleteBooking(bookingId);
+      await loadAll();
+      // 元に戻すタイマーをセット（15秒）
+      if(undoTimerRef.current)clearTimeout(undoTimerRef.current);
+      setUndoTarget({id:bookingId,name:bookingName});
+      undoTimerRef.current=setTimeout(()=>setUndoTarget(null),15000);
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
+  }
+
+  async function undoDelete(){
+    if(!undoTarget)return;
+    setIsLoading(true);
+    try{
+      await api.restoreBooking(undoTarget.id);
+      await loadAll();
+      if(undoTimerRef.current)clearTimeout(undoTimerRef.current);
+      setUndoTarget(null);
+      showNotification(`${undoTarget.name}さんのデータを復元しました`);
+    }catch(e){setError(e.message);}finally{setIsLoading(false);}
+  }
+
   async function refreshMyStatus(){
     setIsLoading(true);
     try{setMyBooking(await api.fetchBookingByEmail(empEmail));await loadSlots();showNotification("最新の状態に更新しました");}
@@ -263,9 +289,6 @@ export default function App(){
             <button onClick={saveHostEmails} disabled={isLoading} style={btnStyle(isLoading?"#aaa":"#667eea")}>
               {hostEmailsSaved?"✅ 保存しました":isLoading?"保存中...":"メールアドレスを保存する"}
             </button>
-            <p style={{fontSize:12,color:"#e67e22",marginTop:10}}>
-              ⚠️ Resendのテストモード（onboarding@resend.dev）では、Resendアカウントに登録したメールアドレス宛にしか送信できません。社内全員へ届けるにはResendでドメイン認証が必要です。
-            </p>
           </div>
 
           {/* スロット追加 */}
@@ -332,6 +355,13 @@ export default function App(){
               <span style={{fontSize:12,color:"#aaa"}}>10秒ごとに自動更新</span>
             </div>
             <p style={{fontSize:12,color:"#999",marginBottom:16}}>社員が希望を提出・変更すると自動的に反映されます</p>
+            {/* 元に戻すバナー */}
+            {undoTarget&&(
+              <div style={{background:"#333",color:"#fff",borderRadius:8,padding:"10px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13}}>
+                <span>🗑 {undoTarget.name}さんのデータを削除しました</span>
+                <button onClick={undoDelete} style={{background:"#f39c12",color:"#fff",border:"none",borderRadius:5,padding:"5px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>元に戻す</button>
+              </div>
+            )}
             {bookings.filter(b=>!b.cancelled).length===0?<p style={{color:"#999"}}>まだ希望がありません</p>:
               bookings.filter(b=>!b.cancelled).map(b=>{
                 return(
@@ -342,7 +372,12 @@ export default function App(){
                         <span style={{color:"#666",fontSize:13,marginLeft:8}}>{b.email}</span>
                         {b.changedAt&&<span style={{marginLeft:8,background:"#fff3cd",color:"#856404",fontSize:11,padding:"2px 6px",borderRadius:4}}>変更あり</span>}
                       </div>
-                      <span style={{color:b.confirmed?"#27ae60":"#e67e22",fontWeight:700,fontSize:13}}>{b.confirmed?"✅ 確定済":"⏳ 未確定"}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:b.confirmed?"#27ae60":"#e67e22",fontWeight:700,fontSize:13}}>{b.confirmed?"✅ 確定済":"⏳ 未確定"}</span>
+                        <button onClick={()=>deleteBooking(b.id,b.name)} disabled={isLoading}
+                          title="この予約を削除する"
+                          style={{background:"#e74c3c",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12,whiteSpace:"nowrap"}}>削除</button>
+                      </div>
                     </div>
                     {/* 確定日時を強調表示 */}
                     {b.confirmed&&(()=>{
