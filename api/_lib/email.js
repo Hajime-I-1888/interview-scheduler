@@ -1,8 +1,16 @@
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+// Gmail SMTP トランスポーター
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,        // 送信元GmailアドレスS
+    pass: process.env.GMAIL_APP_PASSWORD, // Googleアカウントのアプリパスワード
+  },
+});
+
 const FROM_NAME = process.env.FROM_NAME || '面談スケジューラー';
+const FROM_EMAIL = process.env.GMAIL_USER;
 
 // ── ユーティリティ ─────────────────────────────
 function formatDT(isoStr) {
@@ -33,17 +41,12 @@ function getHostEmailList(booking) {
  * 1通送信して結果を返す（エラーを呼び出し元に伝える）
  */
 async function sendOne(to, subject, html) {
-  const result = await resend.emails.send({
-    from: `${FROM_NAME} <${FROM_EMAIL}>`,
+  await transporter.sendMail({
+    from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
     to,
     subject,
     html,
   });
-  // Resend SDK v4 では result.error にエラーが入る
-  if (result.error) {
-    throw new Error(`Resend error: ${JSON.stringify(result.error)}`);
-  }
-  return result;
 }
 
 // ── 希望提出メール ────────────────────────────────
